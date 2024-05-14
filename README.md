@@ -1,393 +1,357 @@
-# one-day
- using UnityEngine;
-#if ENABLE_INPUT_SYSTEM 
-using UnityEngine.InputSystem;
-#endif
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using Unity.Mathematics;
+using UnityEngine;
+using UnityEngine.Networking;
 
-/* Note: animations are called via the controller for both the character and capsule using animator null checks
- */
-
-namespace StarterAssets
+public class RespondJson //
 {
-    [RequireComponent(typeof(CharacterController))]
-#if ENABLE_INPUT_SYSTEM 
-    [RequireComponent(typeof(PlayerInput))]
-#endif
-    public class ThirdPersonController : MonoBehaviour
+    public string bot_id;
+    public string intent;
+    public List_Obj[] messages;
+    public string source;
+}
+[System.Serializable]
+public class List_Obj
+{
+    public string audio_url;
+    public string mid;
+    public string text;
+    public string timestamp;
+    public string type;
+}
+
+public class ApiManager : MonoBehaviour //
+{
+    private string api_url = "https://asia-southeast1-botnoiasr.cloudfunctions.net/voicebotBU";
+    public GameObject chatBubble;
+    public DialogueManage dialogueManage;
+    public static string displayText;
+    public static string hintText;
+    private byte[] fileContents = null;
+    private string responseVoice;
+    private string responseText;
+    public AudioSource audioSource;
+    public AudioClip myAudio;
+    public static bool waiting;
+    public static bool speaking;
+    private string apiTextName;
+    private static List<string> speakerID = new List<string>
     {
-        [Header("Player")]
-        [Tooltip("Move speed of the character in m/s")]
-        public float MoveSpeed = 2.0f;
+        "เอวา", "โบ", "คุณงาม", "แม็กซ์", "อลัน", "ไซเรน", "อลิสา", "เลโอ", 
+        "นาเดียร์", "วนิลา", "อนันดา", "ไอลีน", "ฮิโระ", "ครูดีดี๊", "เจ้าเนิร์ด", 
+        "โอโตะ", "อาวอร์ม", "ปีเตอร์", "คริส", "เจสัน", "หญิงไอโกะ", "น้าเกรซ", 
+        "อาจารย์หลิน", "สโม๊ค", "โตโต้", "นายเบรด", "เนโอ", "สาลี", "แบมบู", 
+        "ผู้ใหญ่ลี", "เท็ดดี้", "โนรา", "แม็ท", "เอลลี่", "ข้าวตอก", "อ้ายเถิน", 
+        "ทัช", "เบน", "คำแก้ว", "น้องโนว์", "ท็อป", "ครูอภิวัฒน์", "พลอย", 
+        "แทน", "เอไอ", "ฟอมมี่", "มานี", "บี", "กิ่ง", "ธนัท", "นิค", "ปรีดี", 
+        "เหมียว", "ตี๋", "ro","boss"
+    };
 
-        [Tooltip("Sprint speed of the character in m/s")]
-        public float SprintSpeed = 5.335f;
-
-        [Tooltip("How fast the character turns to face movement direction")]
-        [Range(0.0f, 0.3f)]
-        public float RotationSmoothTime = 0.12f;
-
-        [Tooltip("Acceleration and deceleration")]
-        public float SpeedChangeRate = 10.0f;
-
-        public AudioClip LandingAudioClip;
-        public AudioClip[] FootstepAudioClips;
-        [Range(0, 1)] public float FootstepAudioVolume = 0.5f;
-
-        [Space(10)]
-        [Tooltip("The height the player can jump")]
-        public float JumpHeight = 1.2f;
-
-        [Tooltip("The character uses its own gravity value. The engine default is -9.81f")]
-        public float Gravity = -15.0f;
-
-        [Space(10)]
-        [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
-        public float JumpTimeout = 0.50f;
-
-        [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
-        public float FallTimeout = 0.15f;
-
-        [Header("Player Grounded")]
-        [Tooltip("If the character is grounded or not. Not part of the CharacterController built in grounded check")]
-        public bool Grounded = true;
-
-        [Tooltip("Useful for rough ground")]
-        public float GroundedOffset = -0.14f;
-
-        [Tooltip("The radius of the grounded check. Should match the radius of the CharacterController")]
-        public float GroundedRadius = 0.28f;
-
-        [Tooltip("What layers the character uses as ground")]
-        public LayerMask GroundLayers;
-
-        [Header("Cinemachine")]
-        [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
-        public GameObject CinemachineCameraTarget;
-
-        [Tooltip("How far in degrees can you move the camera up")]
-        public float TopClamp = 70.0f;
-
-        [Tooltip("How far in degrees can you move the camera down")]
-        public float BottomClamp = -30.0f;
-
-        [Tooltip("Additional degress to override the camera. Useful for fine tuning camera position when locked")]
-        public float CameraAngleOverride = 0.0f;
-
-        [Tooltip("For locking the camera position on all axis")]
-        public static bool LockCameraPosition = false;
-
-        // cinemachine
-        private float _cinemachineTargetYaw;
-        private float _cinemachineTargetPitch;
-
-        // player
-        private float _speed;
-        private float _animationBlend;
-        private float _targetRotation = 0.0f;
-        private float _rotationVelocity;
-        private float _verticalVelocity;
-        private float _terminalVelocity = 53.0f;
-
-        // timeout deltatime
-        private float _jumpTimeoutDelta;
-        private float _fallTimeoutDelta;
-
-        // animation IDs
-        private int _animIDSpeed;
-        private int _animIDGrounded;
-        private int _animIDJump;
-        private int _animIDFreeFall;
-        private int _animIDMotionSpeed;
-
-#if ENABLE_INPUT_SYSTEM 
-        private PlayerInput _playerInput;
-#endif
-        private Animator _animator;
-        private CharacterController _controller;
-        private StarterAssetsInputs _input;
-        private GameObject _mainCamera;
-
-        private const float _threshold = 0.01f;
-
-        private bool _hasAnimator;
-
-        private bool IsCurrentDeviceMouse
+    public string speaker = "โบ";
+    
+    
+    public void sendAPI(char type, string text) //
+    {
+        waiting = true;
+        Debug.Log("sendAPI");
+        StartCoroutine(wait(1f));
+        switch (type)
         {
-            get
+            case 'V':
+                StartCoroutine(sendVoiceRequestAPI());
+                break;
+            case 'T':
+                StartCoroutine(sendTextRequestAPI(text));
+                break;
+        }
+    }
+    
+    private IEnumerator sendVoiceRequestAPI() //
+    {
+        //
+        string fileName = "Record.wav"; 
+        string filePath = Path.Combine(Application.streamingAssetsPath + "/Recordings/", fileName);
+
+        //
+        if (!File.Exists(filePath))
+        {
+            Debug.LogError($"File {filePath} not found!");
+        }
+
+        // Read file in binary mode
+        using (FileStream fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+        {
+            // -----------------------------------------------------------------
+            fileContents = new byte[fileStream.Length];
+            fileStream.Read(fileContents, 0, (int)fileStream.Length);
+        }
+        // -----------------------------------------------------------------
+        Debug.Log($"File {filePath} contains {fileContents.Length} bytes.");
+        string hexString = BitConverter.ToString(fileContents);
+
+        //
+        string post_to_api = "{\"customerId\": \"" + SystemInfo.deviceUniqueIdentifier+PlayerPrefs.GetInt("ID",0) + "\", " +
+            "\"botId\": \"64fdb6041016547581b119dc\", " +
+            "\"input\": {\"type\": \"audio\", \"object\": {" +
+            "\"language\": \"th\", " +
+            "\"audioData\": \"" + hexString + "\", " +
+            "\"dataFormat\": \"hex\", " +
+            "\"audioFormat\": \"wav\"}}, " +
+            "\"output\": {\"type\": \"audio\", " +
+            "\"object\": {\"speakerId\": \"" + speaker + "\"}}}";
+        
+
+        Debug.Log("Sending API request");
+
+        //
+        UnityWebRequest request = UnityWebRequest.PostWwwForm(api_url, post_to_api);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(post_to_api);
+        request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+        request.downloadHandler = new DownloadHandlerBuffer();
+        request.SetRequestHeader("Content-Type", "application/json");
+
+        //
+        yield return request.SendWebRequest();
+        //waiting = false;
+
+        if (request.result == UnityWebRequest.Result.Success) //
+        {
+            Debug.Log("API response received: " + request.downloadHandler.text);
+            responseVoice = request.downloadHandler.text;
+            if (responseVoice.Contains("fail"))
             {
-#if ENABLE_INPUT_SYSTEM
-                return _playerInput.currentControlScheme == "KeyboardMouse";
-#else
-				return false;
-#endif
+                waiting = false;
+                DialogueManage.sentenceIndex -= 1;
+                dialogueManage.PlayNextSentence();
+                yield break;
             }
+            StartCoroutine(handleVoiceJSON());
         }
-
-
-        private void Awake()
+        else //
         {
-            // get a reference to our main camera
-            if (_mainCamera == null)
+            Debug.LogError("API request failed: " + request.error);
+            waiting = false;
+            DialogueManage.sentenceIndex -= 1;
+            dialogueManage.PlayNextSentence();
+        }
+    }
+    
+    private IEnumerator sendTextRequestAPI(string input) //
+    {
+        string filePath = Path.Combine(Application.streamingAssetsPath + "/Recordings/", input+".wav");
+        if (File.Exists(filePath))
+        {
+            string post_to_api_textonly = "{\"customerId\": \"" + SystemInfo.deviceUniqueIdentifier+PlayerPrefs.GetInt("ID",0)+ "\", " +
+                                          "\"botId\": \"64fdb6041016547581b119dc\", " +
+                                          "\"input\": {\"type\": \"text\", \"object\": {" +
+                                          "\"text\": \"" + input + "\"}}, " +
+                                          "\"output\": {\"type\": \"text\"}}";
+            UnityWebRequest requestT = UnityWebRequest.PostWwwForm(api_url, post_to_api_textonly);
+            byte[] bodyRawT = Encoding.UTF8.GetBytes(post_to_api_textonly);
+            requestT.uploadHandler = new UploadHandlerRaw(bodyRawT);
+            requestT.downloadHandler = new DownloadHandlerBuffer();
+            requestT.SetRequestHeader("Content-Type", "application/json");
+
+            //
+            yield return requestT.SendWebRequest();
+
+            if (requestT.result == UnityWebRequest.Result.Success) //
             {
-                _mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
-            }
-        }
 
-        private void Start()
-        {
-            _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
-            
-            _hasAnimator = TryGetComponent(out _animator);
-            _controller = GetComponent<CharacterController>();
-            _input = GetComponent<StarterAssetsInputs>();
-#if ENABLE_INPUT_SYSTEM 
-            _playerInput = GetComponent<PlayerInput>();
-#else
-			Debug.LogError( "Starter Assets package is missing dependencies. Please use Tools/Starter Assets/Reinstall Dependencies to fix it");
-#endif
-
-            AssignAnimationIDs();
-
-            // reset our timeouts on start
-            _jumpTimeoutDelta = JumpTimeout;
-            _fallTimeoutDelta = FallTimeout;
-        }
-
-        private void Update()
-        {
-            _hasAnimator = TryGetComponent(out _animator);
-
-            JumpAndGravity();
-            GroundedCheck();
-            Move();
-        }
-
-        private void LateUpdate()
-        {
-            CameraRotation();
-        }
-
-        private void AssignAnimationIDs()
-        {
-            _animIDSpeed = Animator.StringToHash("Speed");
-            _animIDGrounded = Animator.StringToHash("Grounded");
-            _animIDJump = Animator.StringToHash("Jump");
-            _animIDFreeFall = Animator.StringToHash("FreeFall");
-            _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
-        }
-
-        private void GroundedCheck()
-        {
-            // set sphere position, with offset
-            Vector3 spherePosition = new Vector3(transform.position.x, transform.position.y - GroundedOffset,
-                transform.position.z);
-            Grounded = Physics.CheckSphere(spherePosition, GroundedRadius, GroundLayers,
-                QueryTriggerInteraction.Ignore);
-
-            // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetBool(_animIDGrounded, Grounded);
-            }
-        }
-
-        private void CameraRotation()
-        {
-            // if there is an input and camera position is not fixed
-            if (_input.look.sqrMagnitude >= _threshold && !LockCameraPosition)
-            {
-                //Don't multiply mouse input by Time.deltaTime;
-                float deltaTimeMultiplier = IsCurrentDeviceMouse ? 1.0f : Time.deltaTime;
-
-                _cinemachineTargetYaw += _input.look.x * deltaTimeMultiplier;
-                _cinemachineTargetPitch += _input.look.y * deltaTimeMultiplier;
-            }
-
-            // clamp our rotations so our values are limited 360 degrees
-            _cinemachineTargetYaw = ClampAngle(_cinemachineTargetYaw, float.MinValue, float.MaxValue);
-            _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, BottomClamp, TopClamp);
-
-            // Cinemachine will follow this target
-            CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
-                _cinemachineTargetYaw, 0.0f);
-        }
-
-        private void Move()
-        {
-            // set target speed based on move speed, sprint speed and if sprint is pressed
-            float targetSpeed = _input.sprint ? SprintSpeed : MoveSpeed;
-
-            // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
-
-            // note: Vector2's == operator uses approximation so is not floating point error prone, and is cheaper than magnitude
-            // if there is no input, set the target speed to 0
-            if (_input.move == Vector2.zero) targetSpeed = 0.0f;
-
-            // a reference to the players current horizontal velocity
-            float currentHorizontalSpeed = new Vector3(_controller.velocity.x, 0.0f, _controller.velocity.z).magnitude;
-
-            float speedOffset = 0.1f;
-            float inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
-
-            // accelerate or decelerate to target speed
-            if (currentHorizontalSpeed < targetSpeed - speedOffset ||
-                currentHorizontalSpeed > targetSpeed + speedOffset)
-            {
-                // creates curved result rather than a linear one giving a more organic speed change
-                // note T in Lerp is clamped, so we don't need to clamp our speed
-                _speed = Mathf.Lerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
-                    Time.deltaTime * SpeedChangeRate);
-
-                // round speed to 3 decimal places
-                _speed = Mathf.Round(_speed * 1000f) / 1000f;
-            }
-            else
-            {
-                _speed = targetSpeed;
-            }
-
-            _animationBlend = Mathf.Lerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate);
-            if (_animationBlend < 0.01f) _animationBlend = 0f;
-
-            // normalise input direction
-            Vector3 inputDirection = new Vector3(_input.move.x, 0.0f, _input.move.y).normalized;
-
-            // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
-            // if there is a move input rotate player when the player is moving
-            if (_input.move != Vector2.zero)
-            {
-                _targetRotation = Mathf.Atan2(inputDirection.x, inputDirection.z) * Mathf.Rad2Deg +
-                                  _mainCamera.transform.eulerAngles.y;
-                float rotation = Mathf.SmoothDampAngle(transform.eulerAngles.y, _targetRotation, ref _rotationVelocity,
-                    RotationSmoothTime);
-
-                // rotate to face input direction relative to camera position
-                transform.rotation = Quaternion.Euler(0.0f, rotation, 0.0f);
-            }
-
-
-            Vector3 targetDirection = Quaternion.Euler(0.0f, _targetRotation, 0.0f) * Vector3.forward;
-
-            // move the player
-            _controller.Move(targetDirection.normalized * (_speed * Time.deltaTime) +
-                             new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
-
-            // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetFloat(_animIDSpeed, _animationBlend);
-                _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
-            }
-        }
-
-        private void JumpAndGravity()
-        {
-            if (Grounded)
-            {
-                // reset the fall timeout timer
-                _fallTimeoutDelta = FallTimeout;
-
-                // update animator if using character
-                if (_hasAnimator)
+                if (File.Exists(filePath))
                 {
-                    _animator.SetBool(_animIDJump, false);
-                    _animator.SetBool(_animIDFreeFall, false);
-                }
+                    Debug.Log("Audio exist for " + filePath);
 
-                // stop our velocity dropping infinitely when grounded
-                if (_verticalVelocity < 0.0f)
-                {
-                    _verticalVelocity = -2f;
-                }
-
-                // Jump
-                if (_input.jump && _jumpTimeoutDelta <= 0.0f)
-                {
-                    // the square root of H * -2 * G = how much velocity needed to reach desired height
-                    _verticalVelocity = Mathf.Sqrt(JumpHeight * -2f * Gravity);
-
-                    // update animator if using character
-                    if (_hasAnimator)
+                    UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(filePath, AudioType.WAV);
+                    yield return www.SendWebRequest();
+                    myAudio = DownloadHandlerAudioClip.GetContent(www);
+                    RespondJson respond = new RespondJson();
+                    respond = JsonUtility.FromJson<RespondJson>(requestT.downloadHandler.text);
+                    speaking = true;
+                    waiting = false;
+                    StartCoroutine(dialogueManage.TypeText(respond.messages[0].text));
+                    audioSource.PlayOneShot(myAudio, 0.6f);
+                    yield return new WaitForSeconds(myAudio.length);
+                    speaking = false;
+                    if (dialogueManage.IsLastSentence() && !dialogueManage.IsNextScene())
                     {
-                        _animator.SetBool(_animIDJump, true);
+                        //dialogueManage.MicActive();
                     }
-                }
-
-                // jump timeout
-                if (_jumpTimeoutDelta >= 0.0f)
-                {
-                    _jumpTimeoutDelta -= Time.deltaTime;
-                }
-            }
-            else
-            {
-                // reset the jump timeout timer
-                _jumpTimeoutDelta = JumpTimeout;
-
-                // fall timeout
-                if (_fallTimeoutDelta >= 0.0f)
-                {
-                    _fallTimeoutDelta -= Time.deltaTime;
                 }
                 else
                 {
-                    // update animator if using character
-                    if (_hasAnimator)
-                    {
-                        _animator.SetBool(_animIDFreeFall, true);
-                    }
+                    Debug.Log("API response received: " + requestT.downloadHandler.text);
+                    responseVoice = requestT.downloadHandler.text;
+                    StartCoroutine(handleVoiceJSON());
                 }
-
-                // if we are not grounded, do not jump
-                _input.jump = false;
             }
-
-            // apply gravity over time if under terminal (multiply by delta time twice to linearly speed up over time)
-            if (_verticalVelocity < _terminalVelocity)
+            else //
             {
-                _verticalVelocity += Gravity * Time.deltaTime;
+                Debug.LogError("API request failed: " + requestT.error);
+                waiting = false;
+                DialogueManage.sentenceIndex -= 1;
+                dialogueManage.PlayNextSentence();
             }
         }
-
-        private static float ClampAngle(float lfAngle, float lfMin, float lfMax)
+        else
         {
-            if (lfAngle < -360f) lfAngle += 360f;
-            if (lfAngle > 360f) lfAngle -= 360f;
-            return Mathf.Clamp(lfAngle, lfMin, lfMax);
-        }
+            string post_to_api = "{\"customerId\": \"" + SystemInfo.deviceUniqueIdentifier+PlayerPrefs.GetInt("ID",0) + "\", " +
+                                 "\"botId\": \"64fdb6041016547581b119dc\", " +
+                                 "\"input\": {\"type\": \"text\", \"object\": {" +
+                                 "\"text\": \"" + input + "\"}}, " +
+                                 "\"output\": {\"type\": \"audio\", " +
+                                 "\"object\": {\"speakerId\": \"" + speaker + "\"}}}";
 
-        private void OnDrawGizmosSelected()
-        {
-            Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
-            Color transparentRed = new Color(1.0f, 0.0f, 0.0f, 0.35f);
+            Debug.Log(post_to_api);
 
-            if (Grounded) Gizmos.color = transparentGreen;
-            else Gizmos.color = transparentRed;
+            //
+            UnityWebRequest request = UnityWebRequest.PostWwwForm(api_url, post_to_api);
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(post_to_api);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
 
-            // when selected, draw a gizmo in the position of, and matching radius of, the grounded collider
-            Gizmos.DrawSphere(
-                new Vector3(transform.position.x, transform.position.y - GroundedOffset, transform.position.z),
-                GroundedRadius);
-        }
-
-        private void OnFootstep(AnimationEvent animationEvent)
-        {
-            if (animationEvent.animatorClipInfo.weight > 0.5f)
+            //
+            yield return request.SendWebRequest();
+        
+            if (request.result == UnityWebRequest.Result.Success) //
             {
-                if (FootstepAudioClips.Length > 0)
+                Debug.Log("API response received: " + request.downloadHandler.text);
+                responseVoice = request.downloadHandler.text;
+                StartCoroutine(handleVoiceJSON());
+            }
+            else //
+            {
+                Debug.LogError("API request failed: " + request.error);
+                waiting = false;
+                DialogueManage.sentenceIndex -= 1;
+                dialogueManage.PlayNextSentence();
+            }
+        }
+    }
+
+    public IEnumerator handleVoiceJSON()
+    {
+        RespondJson respondVJson = new RespondJson();
+        try
+        {
+            respondVJson = JsonUtility.FromJson<RespondJson>(responseVoice);
+            StartCoroutine(receiveAudioResponse(respondVJson));
+        }
+        catch (Exception e)
+        {
+            Debug.Log("Exception = " + e);
+            yield break;
+        }
+        yield return respondVJson;
+    }
+
+    public IEnumerator receiveAudioResponse(RespondJson respondJson) //
+    {
+        //Debug.Log(respondJson.messages.Length);
+        //download and play every audio clip in order
+        for (int i = 0; i < respondJson.messages.Length; i++)
+        {
+            // check if the received message has the key
+            if (respondJson.messages[i].text.Contains("$"))
+            {
+                string temp = respondJson.messages[i].text.Remove(0,1);
+                DialogueManage.sentenceIndex = Convert.ToInt32(temp)-2;
+                //Debug.Log(dialogueManage.sentenceIndex);
+                /*var startIndex = respondJson.messages[i].text.IndexOf("(", StringComparison.Ordinal);
+                var endIndex = respondJson.messages[i].text.IndexOf(")", StringComparison.Ordinal);
+                if (startIndex != -1 && endIndex != -1 && endIndex > startIndex)
+                    // Extract the substring between the starting and ending characters
                 {
-                    var index = Random.Range(0, FootstepAudioClips.Length);
-                    AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_controller.center), FootstepAudioVolume);
+                    Debug.Log(respondJson.messages[i].text.Substring(startIndex + 1, endIndex - startIndex - 1));
+                    StartCoroutine(sendTextRequestAPI(respondJson.messages[i].text.Substring(startIndex + 1, endIndex - startIndex - 1)));
+                }*/
+            }
+            else if (respondJson.messages[i].text=="+")
+            {
+                GameManage.scoreTemp++;
+                //Debug.Log("TempScore = "+GameManage.score);
+            }
+            else if (respondJson.messages[i].text=="-")
+            {
+                GameManage.scoreTemp++;
+                //Debug.Log("TempScore = "+GameManage.score);
+            }
+            else
+            {
+                string audio_url = respondJson.messages[i].audio_url;
+                UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip(audio_url, AudioType.WAV);
+                yield return www.SendWebRequest();
+                myAudio = DownloadHandlerAudioClip.GetContent(www);
+                
+                if (dialogueManage.currentScene.Sentences[DialogueManage.sentenceIndex].text == respondJson.intent)
+                {
+                    SaveWav.Save(respondJson.intent, myAudio);
+                    Debug.Log("Saved audio: "+ respondJson.intent+".wav");
+                }
+                
+                //displayText = respondJson.messages[i].text;
+                speaking = true;
+                waiting = false;
+                StartCoroutine(dialogueManage.TypeText(respondJson.messages[i].text
+                    .Replace("%", "\n")
+                    .Replace("ชั้น", "ฉัน")
+                    .Replace("มั้ย", "ไหม")
+                    .Replace("รึ", "หรือ")
+                    .Replace("แคนด\u0e35\u0e49 ทาวเวอร\u0e4c", "Candy Tower")
+                    .Replace("โก\u0e4aส ค\u0e34ลเลอร\u0e4c", "Ghost Killer")
+                    .Replace("เฟ\u0e34ร\u0e4cส เล\u0e34ฟ", "First Love")));
+            
+                
+                
+                //play clip until finish then continue and remove chatBubble
+                audioSource.PlayOneShot(myAudio,0.6f);
+                //create chatBubble
+                //var temp = Instantiate(chatBubble, transform.position, quaternion.identity,transform);
+                //AudioSource.PlayClipAtPoint(myAudio, transform.position, 1);
+                yield return new WaitForSeconds(myAudio.length);
+                speaking = false;
+                //Destroy(temp);
+                if (dialogueManage.IsLastSentence()&&!dialogueManage.IsNextScene())
+                {
+                    dialogueManage.MicActive();
                 }
             }
         }
+    }
 
-        private void OnLand(AnimationEvent animationEvent)
+    public IEnumerator wait(float time)
+    {
+        dialogueManage.personName.text = "โมกุ ไอ";
+        dialogueManage.personName.color = Color.magenta;
+        dialogueManage.dialogue.text = "";
+        displayText = "";
+        var temp = Instantiate(chatBubble, transform.position, quaternion.identity,transform);
+        while (waiting)
         {
-            if (animationEvent.animatorClipInfo.weight > 0.5f)
+            if (waiting)
             {
-                AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_controller.center), FootstepAudioVolume);
+                dialogueManage.dialogue.text += ". ";
+                displayText += ". ";
+                yield return new WaitForSeconds(time);
+            }
+            if (waiting)
+            {
+                dialogueManage.dialogue.text += ". ";
+                displayText += ". ";
+                yield return new WaitForSeconds(time);
+            }
+            if (waiting)
+            {
+                dialogueManage.dialogue.text += ". ";
+                displayText = ". ";
+                yield return new WaitForSeconds(time);
             }
         }
+        Destroy(temp);
     }
 }
